@@ -326,9 +326,11 @@ impl BluezClient {
 // -------------------------------------------------------------------- readers
 
 fn read_adapter(path: &OwnedObjectPath, p: Props<'_>) -> Adapter {
+    let id = path.as_str().rsplit('/').next().unwrap_or_default().to_string();
     Adapter {
         path: path.clone(),
-        id: path.as_str().rsplit('/').next().unwrap_or_default().to_string(),
+        model: adapter_model(&id),
+        id,
         name: p.string("Name"),
         alias: p.string("Alias"),
         address: p.string("Address"),
@@ -379,6 +381,49 @@ fn read_device(
         battery: battery.or_else(|| p.opt_u8("BatteryPercentage")),
         media_connected,
     }
+}
+
+/// BlueZ only reports the chip vendor, so the model comes from the kernel:
+/// `/sys/class/bluetooth/hciN/device` is the USB interface (or PCI function)
+/// the controller hangs off, and USB devices carry their product string one
+/// level up. Anything without one — PCI, SDIO, UART controllers — yields
+/// nothing, and the caller falls back to the vendor name.
+fn adapter_model(id: &str) -> String {
+    let device = std::path::Path::new("/sys/class/bluetooth").join(id).join("device");
+    let read = |dir: &std::path::Path, name: &str| {
+        std::fs::read_to_string(dir.join(name))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    for dir in [device.join(".."), device] {
+        let Some(product) = read(&dir, "product") else { continue };
+        return match read(&dir, "manufacturer") {
+            Some(maker) if !repeats_maker(&maker, &product) => {
+                format!("{} {product}", brand(&maker))
+            }
+            _ => product,
+        };
+    }
+    String::new()
+}
+
+/// "Apple Inc." + "Bluetooth USB Host Controller" reads better joined;
+/// "TP-Link" + "TP-Link UB500 Adapter" does not.
+fn repeats_maker(maker: &str, product: &str) -> bool {
+    product.to_lowercase().starts_with(&brand(maker).to_lowercase())
+}
+
+/// The manufacturer string without its corporate suffix: "Apple Inc." → "Apple".
+fn brand(maker: &str) -> &str {
+    let mut out = maker.trim();
+    for suffix in [", Inc.", " Inc.", " Inc", " Corp.", " Corporation", " Co., Ltd.", " Ltd.", " Ltd", " GmbH", " LLC"] {
+        if let Some(stripped) = out.strip_suffix(suffix) {
+            out = stripped.trim_end_matches(',').trim();
+            break;
+        }
+    }
+    out
 }
 
 /// Connected devices first, then paired ones, then whatever is in range with

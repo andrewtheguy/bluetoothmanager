@@ -111,7 +111,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
                 spans.push(kv("connected", &connected.to_string()));
                 spans.push(Span::raw("  "));
             }
-            spans.push(kv("adapter", &format!("{} ({})", a.alias, a.id)));
+            spans.push(kv("adapter", &format!("{} ({})", a.label(), a.id)));
         }
         None if app.first_load => spans.push(Span::styled("loading…", Style::default().fg(FG_DIM))),
         None => spans.push(Span::styled(
@@ -240,36 +240,39 @@ fn adapter_row(a: &Adapter) -> ListItem<'static> {
         Span::styled(if a.powered { "●" } else { "○" }, Style::default().fg(color)),
         Span::raw(" "),
         Span::styled(
-            format!("{:<8}", truncate(&a.id, 8)),
+            truncate(&a.label(), 30),
             Style::default().add_modifier(Modifier::BOLD),
         ),
-        Span::styled(a.power_state.to_string(), Style::default().fg(color)),
     ]);
 
-    // Second line: whatever is most useful to know at a glance about this
-    // adapter without selecting it.
+    // Second line: the kernel name and state, then whatever is most useful to
+    // know at a glance about this adapter without selecting it.
     let connected = a.connected_devices().count();
-    let detail = if !a.powered {
-        truncate(&a.alias, 30)
-    } else if connected > 0 {
+    let detail = if connected > 0 {
         let names: Vec<String> = a.connected_devices().map(|d| d.display_name()).collect();
-        truncate(&names.join(", "), 30)
+        names.join(", ")
     } else if a.discovering {
         "scanning…".into()
-    } else {
+    } else if a.powered {
         format!(
             "{} known device{}",
             a.devices.len(),
             if a.devices.len() == 1 { "" } else { "s" }
         )
+    } else {
+        String::new()
     };
 
     ListItem::new(vec![
         head,
-        Line::from(Span::styled(
-            format!("  {detail}"),
-            Style::default().fg(FG_DIM),
-        )),
+        Line::from(vec![
+            Span::styled(format!("  {} ", a.id), Style::default().fg(FG_DIM)),
+            Span::styled(a.power_state.to_string(), Style::default().fg(color)),
+            Span::styled(
+                if detail.is_empty() { String::new() } else { format!(" · {}", truncate(&detail, 22)) },
+                Style::default().fg(FG_DIM),
+            ),
+        ]),
     ])
 }
 
@@ -293,6 +296,14 @@ fn draw_adapter_detail(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(FG_DIM),
         ),
     ]));
+    lines.push(row(
+        "model",
+        &if a.model.is_empty() {
+            format!("{} ({})", a.label(), a.id)
+        } else {
+            format!("{} ({})", a.model, a.id)
+        },
+    ));
     lines.push(Line::from(vec![
         Span::styled(format!("{:<11}", "power"), Style::default().fg(FG_KEY)),
         Span::styled(a.power_state.to_string(), Style::default().fg(adapter_color(a))),
@@ -375,7 +386,7 @@ fn draw_adapter_detail(frame: &mut Frame, area: Rect, app: &App) {
 fn draw_devices(frame: &mut Frame, area: Rect, app: &App) {
     let focused = app.focus == Focus::Devices;
     let title = match app.adapter() {
-        Some(a) => format!("Devices on {} ({})", a.id, a.devices.len()),
+        Some(a) => format!("Devices on {} ({})", truncate(&a.label(), 40), a.devices.len()),
         None => "Devices".to_string(),
     };
     let block = panel(title, focused);

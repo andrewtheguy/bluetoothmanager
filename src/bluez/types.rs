@@ -58,6 +58,9 @@ pub struct Adapter {
     pub alias: String,
     pub address: String,
     pub address_type: String,
+    /// What the hardware calls itself, from sysfs: "TP-Link UB500 Adapter".
+    /// Empty when the bus type exposes no product string.
+    pub model: String,
     pub powered: bool,
     pub power_state: PowerState,
     pub discoverable: bool,
@@ -74,6 +77,18 @@ pub struct Adapter {
 }
 
 impl Adapter {
+    /// The name to list the adapter under: the hardware model when the kernel
+    /// knows it, else the chip vendor, else the bare `hciN`.
+    pub fn label(&self) -> String {
+        if !self.model.is_empty() {
+            self.model.clone()
+        } else if let Some(vendor) = company_name(self.manufacturer) {
+            format!("{vendor} adapter")
+        } else {
+            self.id.clone()
+        }
+    }
+
     pub fn connected_devices(&self) -> impl Iterator<Item = &Device> {
         self.devices.iter().filter(|d| d.connected)
     }
