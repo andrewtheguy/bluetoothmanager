@@ -125,9 +125,15 @@ pub enum Modal {
 
 impl Modal {
     fn is_agent(&self) -> bool {
+        self.holds_reply() || matches!(self, Modal::Info { .. })
+    }
+
+    /// BlueZ is waiting on this dialog: dropping it would drop the reply
+    /// channel and cancel the pairing.
+    fn holds_reply(&self) -> bool {
         match self {
             Modal::Prompt(p) => matches!(p.kind, PromptKind::AgentPin(_) | PromptKind::AgentPasskey(_)),
-            Modal::Confirm(ConfirmKind::Agent { .. }) | Modal::Info { .. } => true,
+            Modal::Confirm(ConfirmKind::Agent { .. }) => true,
             _ => false,
         }
     }
@@ -277,8 +283,11 @@ impl App {
             }
             Msg::Agent(req) => self.on_agent_request(req),
             Msg::AgentDisplay { device, text } => {
-                let name = self.device_name(&device);
-                self.modal = Modal::Info { title: format!("Pairing with {name}"), text };
+                // A dialog BlueZ is waiting on outranks a card it only wants seen.
+                if !self.modal.holds_reply() {
+                    let name = self.device_name(&device);
+                    self.modal = Modal::Info { title: format!("Pairing with {name}"), text };
+                }
             }
             Msg::AgentCancel => {
                 if self.modal.is_agent() {
@@ -679,7 +688,9 @@ impl App {
 
     fn submit_prompt(&mut self, p: Prompt) {
         let value = p.fields[0].value.trim().to_string();
-        let passkey = value.parse::<u32>().ok().filter(|k| *k <= 999_999);
+        let passkey = (value.len() == 6 && value.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| value.parse::<u32>().ok())
+            .flatten();
         let problem = match &p.kind {
             PromptKind::RenameDevice { .. } | PromptKind::RenameAdapter { .. } if value.is_empty() => {
                 Some("a name is required")

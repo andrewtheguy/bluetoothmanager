@@ -21,6 +21,8 @@ use crate::app::Msg;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(45);
 /// Pairing includes the user typing a passkey, so it gets more room.
 const PAIR_TIMEOUT: Duration = Duration::from_secs(120);
+/// Cancelling a stuck pairing must not itself hang the caller.
+const CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ------------------------------------------------------------------ properties
 
@@ -159,7 +161,7 @@ impl BluezClient {
 
         for (path, ifaces) in &objects {
             let Some(d) = ifaces.get(IFACE_DEVICE) else { continue };
-            let battery = ifaces.get(IFACE_BATTERY).map(|b| Props(b).u8("Percentage"));
+            let battery = ifaces.get(IFACE_BATTERY).and_then(|b| Props(b).opt_u8("Percentage"));
             let media_connected = ifaces
                 .get(IFACE_MEDIA_CONTROL)
                 .is_some_and(|m| Props(m).bool("Connected"));
@@ -262,7 +264,7 @@ impl BluezClient {
                     if name.as_str() == "org.bluez.Error.AlreadyExists" => {}
                 Ok(Err(e)) => return Err(e).context("pairing"),
                 Err(_) => {
-                    let _ = proxy.cancel_pairing().await;
+                    let _ = tokio::time::timeout(CANCEL_TIMEOUT, proxy.cancel_pairing()).await;
                     bail!("pairing timed out");
                 }
             }

@@ -10,6 +10,7 @@ use std::time::Duration;
 use anyhow::Result;
 use crossterm::event::EventStream;
 use futures_util::StreamExt;
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 use zbus::message::Type as MessageType;
 use zbus::{MatchRule, MessageStream};
@@ -66,6 +67,10 @@ async fn main() -> Result<()> {
     tokio::spawn(refresher(client.clone(), tx.clone(), poke_rx));
 
     let mut app = App::new(client, tx, poke_tx);
+    // Leave the terminal usable when we are killed or the terminal goes away,
+    // not only on a clean `q`.
+    let mut sigterm = signal(SignalKind::terminate())?;
+    let mut sighup = signal(SignalKind::hangup())?;
     let mut terminal = ratatui::init();
     let mut events = EventStream::new();
 
@@ -87,6 +92,8 @@ async fn main() -> Result<()> {
                 Some(msg) => app.on_msg(msg),
                 None => break Ok(()),
             },
+            _ = sigterm.recv() => break Ok(()),
+            _ = sighup.recv() => break Ok(()),
             // Keeps the spinner turning and ages out stale status messages.
             _ = tokio::time::sleep(Duration::from_millis(120)) => {}
         }
